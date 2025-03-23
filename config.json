@@ -1,0 +1,24 @@
+{
+    "streamer": {
+        "client_id": "5r243f2p934ptjpg0ahzdzer9rgsy4",
+        "client_secret": "x8klk8bokm0hw8lekxbq2pa2319xub",
+        "access_token": "ual74xnoo7old9dvou4qlfqfqpct0g",
+        "refresh_token": "",
+        "token_expiry": "2025-03-23T14:07:58.800879"
+    },
+    "chat_bot": {
+        "client_id": "kvr3o58p1524wqmlhwp4xwqk9o9223",
+        "client_secret": "",
+        "access_token": "5kjyg9blv6rhgdamqjqppnre8vgdpb",
+        "refresh_token": "",
+        "token_expiry": "2025-03-23T14:08:26.323588"
+    },
+    "twitch_username": "kilodawe",
+    "rewards": {
+        "normal_vote": "1770f700-f38e-4554-b6ef-a343530c3bae",
+        "super_vote": "c10f02d3-867e-44cf-8002-aab58990050e"
+    },
+    "spreadsheet_id": "1rIVCDXx5KwqF42F2Yq11k5UQeF_cfNY3KVcFSmZxw80",
+    "min_match_score": 80,
+    "super_vote_weight": 10
+}
