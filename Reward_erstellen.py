@@ -16,7 +16,7 @@ reward_params = {
     'prompt': 'Deine Stimme (1) für ein Spiel aus unserer Playlist.',
     'is_user_input_required': True,
     'is_max_per_stream_enabled': False,
-    'max_per_stream': False,
+    'max_per_stream': 1,
 }
 
 headers = {
