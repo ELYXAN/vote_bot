@@ -1,10 +1,10 @@
 import requests
 
 # Twitch API-Informationen
-client_id = '5r243f2p934ptjpg0ahzdzer9rgsy4'
-oauth_token = '0x2r5f9wsie1sf96v3l5d8d1j9ol0b'
-oauth_token_manage = 'uojg29c851nt855odbp71sw0xf4ot4'
-broadcaster_id = '619338130'  # Die ID des Kanals, für den die Belohnung erstellt werden soll
+client_id = ''
+oauth_token = ''
+oauth_token_manage = ''
+broadcaster_id = ''  # Die ID des Kanals, für den die Belohnung erstellt werden soll
 
 # Twitch API-Endpunkt für die Erstellung einer Kanalpunkte-Belohnung
 rewards_endpoint = f'https://api.twitch.tv/helix/channel_points/custom_rewards?broadcaster_id={broadcaster_id}'
