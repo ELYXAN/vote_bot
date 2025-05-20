@@ -103,9 +103,9 @@ def load_config():
             print(loaded_config['streamer']['client_secret'])
             print(loaded_config['chat_bot'].get('client_secret'))
             print(loaded_config['chat_bot']['client_secret'])
-            if not loaded_config['streamer'].get('client_secret')  == 'x8klk8bokm0hw8lekxbq2pa2319xub':
+            if not loaded_config['streamer'].get('client_secret')  == '':
                  print("WARNUNG: Bitte trage das 'client_secret' für 'streamer' in config.json ein!")
-            if not loaded_config['chat_bot'].get('client_secret')  == 'x8klk8bokm0hw8lekxbq2pa2319xub':
+            if not loaded_config['chat_bot'].get('client_secret')  == '':
                  print("WARNUNG: Bitte trage das 'client_secret' für 'chat_bot' in config.json ein!")
             return loaded_config
     else:
