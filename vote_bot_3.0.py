@@ -12,11 +12,13 @@ import pandas as pd
 # import websockets # Nicht direkt im gezeigten Code verwendet, ggf. später für echten WebSocket
 from fuzzywuzzy import process
 from oauth2client.service_account import ServiceAccountCredentials
+from openai import AsyncOpenAI
+from ddgs import DDGS
 
 # --- Konfiguration und Konstanten ---
 CONFIG_FILE = 'config.json'
-BROADCASTER_ID = 'YOUR_BROADCASTER_ID_HERE' # Muss als String sein für API calls
-CLIENT_SECRET = 'CLIENT_SECRET'
+BROADCASTER_ID = '' # Muss als String sein für API calls
+CLIENT_SECRET = ''
 REDIRECT_URI = 'http://localhost' # Standard für lokale Skripte
 
 # Scopes - WICHTIG: Passe diese an, falls nötig
@@ -26,7 +28,7 @@ CHAT_BOT_SCOPES = 'chat:read chat:edit user:write:chat'
 # Standardkonfiguration (inkl. Scopes für Info)
 DEFAULT_CONFIG = {
     'streamer': {
-        'client_id': 'CLIENT_ID',
+        'client_id': '',
         'client_secret': CLIENT_SECRET, # Füge hier dein Secret ein!
         'access_token': '',
         'refresh_token': '',
@@ -34,22 +36,27 @@ DEFAULT_CONFIG = {
         'scopes': STREAMER_SCOPES
     },
     'chat_bot': {
-        'client_id': 'CLIENT_ID',
+        'client_id': '',
         'client_secret': CLIENT_SECRET, # Füge hier dein Secret ein!
         'access_token': '',
         'refresh_token': '',
         'token_expiry': '',
         'scopes': CHAT_BOT_SCOPES
     },
-    'twitch_username': 'TWITCH_CHANNEL_NAME',
+    'twitch_username': 'kus_swat__',
     'rewards': {
-        'normal_vote': 'VOTE_ID_1',
-        'super_vote': 'VOTE_ID_2'
+        'normal_vote': '',
+        'super_vote': '',
+        'ultra_vote': '',
+        'ai_chat': ''
     },
-    'spreadsheet_id': 'YOUR_SPREADSHEET_ID',
+    'spreadsheet_id': '',
     'min_match_score': 80,
     'super_vote_weight': 10,
-    'broadcaster_id': BROADCASTER_ID
+    'ultra_vote_weight': 25,
+    'broadcaster_id': BROADCASTER_ID,
+    'openai_api_key': '',
+    'openai_model': 'gpt-4o'
 }
 
 # Cache für Daten
@@ -77,8 +84,6 @@ def banner():
  ╚═════╝  ╚═════╝    ╚═╝   ╚══════╝       ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
 
 Version 3.0 - Made by: ELYXAN / KUS_SWAT_ - Async + OAuth Fix - Websocket Version
-
-Read the Docs - https://github.com/ELYXAN/vote_bot/edit/main/vote_bot_3.0.py
     """)
 
 
@@ -103,10 +108,12 @@ def load_config():
             print(loaded_config['streamer']['client_secret'])
             print(loaded_config['chat_bot'].get('client_secret'))
             print(loaded_config['chat_bot']['client_secret'])
-            if not loaded_config['streamer'].get('client_secret')  == '':
+            if not loaded_config['streamer'].get('client_secret')  == 'x8klk8bokm0hw8lekxbq2pa2319xub':
                  print("WARNUNG: Bitte trage das 'client_secret' für 'streamer' in config.json ein!")
-            if not loaded_config['chat_bot'].get('client_secret')  == '':
+            if not loaded_config['chat_bot'].get('client_secret')  == 'x8klk8bokm0hw8lekxbq2pa2319xub':
                  print("WARNUNG: Bitte trage das 'client_secret' für 'chat_bot' in config.json ein!")
+            if 'openai_api_key' not in loaded_config or not loaded_config['openai_api_key']:
+                 print("WARNUNG: 'openai_api_key' fehlt in config.json. AI-Funktionen werden deaktiviert sein.")
             return loaded_config
     else:
         print(f"Konfigurationsdatei {CONFIG_FILE} nicht gefunden. Erstelle neue.")
@@ -374,7 +381,7 @@ async def update_games_cache():
         print("Google Sheets nicht initialisiert, kann Spiele-Cache nicht aktualisieren.")
 
 # +++ NEUE FUNKTION +++
-async def calculate_rank_and_notify(session, config, game_name, new_votes, user):
+async def calculate_rank_and_notify(session, config, game_name, new_votes, added_votes, user):
     """
     Liest den aktuellen Stand, berechnet den neuen Rang lokal nach Hinzufügen
     des Votes und sendet die Benachrichtigung.
@@ -386,6 +393,7 @@ async def calculate_rank_and_notify(session, config, game_name, new_votes, user)
 
     print(f"Berechne hypothetischen Rang für '{game_name}' mit {new_votes} Votes...")
     rank = 0
+    old_rank = 0
     try:
         # Hole aktuelle Votes und Spiele (A2:B) - UNFORMATTED für Zahlen
         # Wichtig: Hole String-Werte, um Konsistenz zu wahren, Konvertierung später
@@ -395,21 +403,39 @@ async def calculate_rank_and_notify(session, config, game_name, new_votes, user)
         game_votes_list = []
         game_found_in_list = False
 
+        # --- 1. Liste aufbauen und Alten Rang ermitteln ---
         if current_data:
+            # Temporäre Liste für Alte Rangberechnung
+            temp_old_list = []
             for row in current_data:
                 if len(row) >= 2:
                     try:
-                        # Versuche Vote-Zahl zu bekommen, nimm 0 bei Fehler/Leere
+                        c_votes = int(row[0]) if str(row[0]).strip() else 0
+                    except (ValueError, TypeError):
+                        c_votes = 0
+                    c_name = str(row[1]).strip()
+                    if not c_name: continue
+                    
+                    temp_old_list.append({'votes': c_votes, 'name': c_name})
+
+            # Sortieren für Alten Rang
+            temp_old_list.sort(key=lambda x: (-x['votes'], x['name']))
+            for i, g in enumerate(temp_old_list, start=1):
+                if g['name'] == game_name:
+                    old_rank = i
+                    break
+            
+            # Jetzt Liste für Neuen Rang bauen
+            for row in current_data:
+                if len(row) >= 2:
+                    try:
                         current_game_votes = int(row[0]) if str(row[0]).strip() else 0
                     except (ValueError, TypeError):
                         current_game_votes = 0
-                    # Spielname als String
                     current_game_name = str(row[1]).strip()
 
-                    if not current_game_name: # Überspringe leere Spielnamen-Zellen
-                         continue
+                    if not current_game_name: continue
 
-                    # Wenn es das gevotete Spiel ist, nutze die *neue* Stimmenzahl
                     if current_game_name == game_name:
                         game_votes_list.append({'votes': new_votes, 'name': current_game_name})
                         game_found_in_list = True
@@ -423,9 +449,9 @@ async def calculate_rank_and_notify(session, config, game_name, new_votes, user)
         if not game_found_in_list:
              print(f"'{game_name}' ist neu, füge zur lokalen Liste hinzu.")
              game_votes_list.append({'votes': new_votes, 'name': game_name})
+             old_rank = len(game_votes_list) + 1 # War vorher quasi letzter + 1
 
         # Sortiere die lokale Liste: Absteigend nach Votes, dann aufsteigend nach Name
-        # Sortiere direkt die Liste von Dictionaries
         game_votes_list.sort(key=lambda x: (-x['votes'], x['name']))
 
         # Finde den Rang (1-basiert) in der *lokal sortierten* Liste
@@ -436,15 +462,36 @@ async def calculate_rank_and_notify(session, config, game_name, new_votes, user)
 
         # Sende die Nachricht
         if rank > 0:
-            print(f"'{game_name}' ist nach diesem Vote auf Rang #{rank}.")
-            chat_message = f"@{user} hat für '{game_name}' gevotet! | Votes: {new_votes} | Neue Position: #{rank}"
+            print(f"'{game_name}' ist nach diesem Vote auf Rang #{rank} (Vorher: #{old_rank if old_rank > 0 else 'Neu'}).")
+            
+            # Emotes und Formatierung
+            emote_vote = "🗳️"
+            emote_rank = "🏆"
+            emote_up = "📈"
+            emote_sparkles = "✨"
+            
+            msg_parts = []
+            msg_parts.append(f"{emote_vote} @{user} hat für '{game_name}' gevotet!")
+            msg_parts.append(f"(+{added_votes})")
+            msg_parts.append(f"➡️ Total: {new_votes} Votes")
+            
+            rank_info = f"{emote_rank} Rang: #{rank}"
+            
+            # Prüfen ob Rang verbessert (kleinere Zahl ist besser)
+            if old_rank > 0 and rank < old_rank:
+                 rank_info += f" {emote_up} (UP from #{old_rank}!)"
+            elif old_rank == 0:
+                 rank_info += f" {emote_sparkles} (New Entry!)"
+                 
+            msg_parts.append(rank_info)
+            
+            chat_message = " | ".join(msg_parts)
             await send_chat_message(session, config, chat_message)
         else:
-            # Fallback, falls Rang nicht gefunden wurde (sollte nicht passieren)
-            print(f"WARNUNG: Konnte Rang für '{game_name}' nicht ermitteln nach lokaler Sortierung.")
+            # Fallback
+            print(f"WARNUNG: Konnte Rang für '{game_name}' nicht ermitteln.")
             chat_message = f"@{user} hat für '{game_name}' gevotet! | Votes: {new_votes}"
             await send_chat_message(session, config, chat_message)
-
         return rank
 
     except gspread.exceptions.APIError as e:
@@ -478,6 +525,10 @@ async def listen_to_redemptions(config):
                     rewards_to_check.append(('normal_vote', config['rewards']['normal_vote']))
                 if config['rewards'].get('super_vote'):
                      rewards_to_check.append(('super_vote', config['rewards']['super_vote']))
+                if config['rewards'].get('ultra_vote'):
+                     rewards_to_check.append(('ultra_vote', config['rewards']['ultra_vote']))
+                if config['rewards'].get('ai_chat'):
+                     rewards_to_check.append(('ai_chat', config['rewards']['ai_chat']))
 
                 if not rewards_to_check:
                      print("Keine Reward-IDs in config.json gefunden. Listener pausiert.")
@@ -504,7 +555,8 @@ async def listen_to_redemptions(config):
                         if response.status == 200:
                             data = await response.json()
                             redemptions = data.get('data', [])
-                            #print(f"Abfrage für {vote_type} ({reward_id}): {len(redemptions)} unerfüllt gefunden.")
+                            if len(redemptions) > 0:
+                                print(f"Abfrage für {vote_type} ({reward_id}): {len(redemptions)} unerfüllt gefunden.")
 
                             for entry in redemptions:
                                 vote_id = entry.get('id')
@@ -561,22 +613,162 @@ async def process_votes(config):
 
                 print(f"\nVerarbeite Vote ID: {vote_id} von {user} für '{user_input}' ({vote_type})")
 
+                # --- AI CHAT HANDLING ---
+                if vote_type == 'ai_chat':
+                    if not config.get('openai_api_key'):
+                        print("FEHLER: Kein OpenAI API Key konfiguriert, aber AI Reward empfangen.")
+                        vote_queue.task_done()
+                        continue
+
+                    # Bot Token Check für Chat-Antwort
+                    if not await ensure_valid_token(session, config, 'chat_bot'):
+                         print("Chat-Bot Token ungültig. Kann keine AI Antwort senden.")
+                         vote_queue.task_done()
+                         continue
+                    
+                    try:
+                        print(f"Generiere AI Antwort für '{user_input}'...")
+                        client = AsyncOpenAI(api_key=config['openai_api_key'])
+                        current_date = datetime.now().strftime("%Y-%m-%d")
+                        
+                        # --- Tool Definition ---
+                        tools = [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "search_web",
+                                    "description": "Search the internet for real-time information, current events, or specific game details. Use this when the user asks about something recent or factual that you might not know.",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "query": {
+                                                "type": "string",
+                                                "description": "The search query to send to the search engine (e.g. 'current German Chancellor', 'Release date of GTA 6')."
+                                            }
+                                        },
+                                        "required": ["query"]
+                                    }
+                                }
+                            }
+                        ]
+
+                        messages = [
+                            {"role": "system", "content": f"You are a helpful Twitch chatbot. Today's date is {current_date}. If you need real-time info, use the search_web tool. Keep your FINAL answer brief and concise, under 400 characters."},
+                            {"role": "user", "content": user_input}
+                        ]
+
+                        # 1. Erster Call: AI entscheidet, ob sie suchen muss
+                        response = await client.chat.completions.create(
+                            model=config.get('openai_model', 'gpt-4o'),
+                            messages=messages,
+                            tools=tools,
+                            tool_choice="auto",
+                            max_tokens=150,
+                            temperature=0.7
+                        )
+                        
+                        response_message = response.choices[0].message
+                        tool_calls = response_message.tool_calls
+                        
+                        # 2. Wenn Tool Calls vorhanden sind, führe sie aus
+                        if tool_calls:
+                            print(f"-> AI möchte suchen: {[t.function.name for t in tool_calls]}")
+                            messages.append(response_message) # Füge die Intention der AI zum Verlauf hinzu
+
+                            for tool_call in tool_calls:
+                                if tool_call.function.name == "search_web":
+                                    # Parse Arguments
+                                    function_args = json.loads(tool_call.function.arguments)
+                                    query = function_args.get("query")
+                                    print(f"-> Suche im Web nach: '{query}'")
+                                    
+                                    # Führe Suche aus (DuckDuckGo)
+                                    search_results = "No results found."
+                                    try:
+                                        # DDGS in Version 8.0+ hat keinen AsyncDDGS mehr direkt im Root.
+                                        # Wir führen es synchron in einem Thread aus, damit der Loop nicht blockiert.
+                                        def do_ddg_search(q):
+                                            with DDGS() as ddgs:
+                                                # Versuche 'html' Backend, das ist oft robuster gegen Bot-Schutz
+                                                return list(ddgs.text(q, max_results=3, backend="html"))
+                                        
+                                        loop = asyncio.get_running_loop()
+                                        results_list = await loop.run_in_executor(None, do_ddg_search, query)                                        
+                                        print(f"DEBUG: Gefundene Ergebnisse: {len(results_list)}")
+                                        if results_list:
+                                            # Formatiere Ergebnisse kompakt
+                                            search_results = "\n".join([f"- {r['title']}: {r['body']}" for r in results_list])
+                                        else:
+                                            print("DEBUG: Liste war leer.")
+                                    except Exception as s_err:
+                                        print(f"Fehler bei der Web-Suche: {s_err}")
+                                        search_results = f"Search failed: {s_err}"
+
+                                    # Ergebnis als 'tool' message zurückgeben
+                                    messages.append({
+                                        "tool_call_id": tool_call.id,
+                                        "role": "tool",
+                                        "name": "search_web",
+                                        "content": search_results
+                                    })
+                            
+                            # 3. Zweiter Call: AI generiert die Antwort mit den Suchergebnissen
+                            print("-> Generiere finale Antwort mit Suchergebnissen...")
+                            final_response = await client.chat.completions.create(
+                                model=config.get('openai_model', 'gpt-4o'),
+                                messages=messages,
+                                max_tokens=150, # Antwort kurz halten
+                                temperature=0.7
+                            )
+                            ai_response = final_response.choices[0].message.content.strip()
+                        else:
+                            # Keine Suche notwendig
+                            ai_response = response_message.content.strip()
+                        
+                        # Antwort senden
+                        await send_chat_message(session, config, f"🤖 @{user}: {ai_response}")
+                        
+                        # Vote als erfüllt markieren
+                        if not await ensure_valid_token(session, config, 'streamer'):
+                            print("Streamer Token ungültig, kann Reward nicht fulfillen.")
+                        else:
+                            await fulfill_vote(session, config, reward_id, vote_id)
+
+                    except Exception as e:
+                        print(f"Fehler bei OpenAI Anfrage: {e}")
+                        await send_chat_message(session, config, f"@{user} Entschuldigung, meine AI-Hirnzellen haben gerade einen Kurzschluss. 😵")
+                        # Trotzdem fulfillen, damit Punkte nicht verloren gehen? Oder erstatten?
+                        # Hier fulfillen wir, um den Loop nicht zu blockieren.
+                        if await ensure_valid_token(session, config, 'streamer'):
+                             await fulfill_vote(session, config, reward_id, vote_id)
+                    
+                    vote_queue.task_done()
+                    continue
+                # ------------------------
+
                 if not cache.get('worksheet'):
                     print("Google Sheet nicht verfügbar. Vote kann nicht verarbeitet werden.")
                     vote_queue.task_done()
                     continue
 
                 # Token Checks (Streamer für Fulfill, Bot wird in Notify geprüft)
-                if not await ensure_valid_token(session, config, 'streamer'):
-                     print("Streamer-Token ungültig. Vote kann nicht als erfüllt markiert werden.")
-                     vote_queue.task_done()
-                     continue
+                if vote_type != 'manual':
+                    if not await ensure_valid_token(session, config, 'streamer'):
+                         print("Streamer-Token ungültig. Vote kann nicht als erfüllt markiert werden.")
+                         vote_queue.task_done()
+                         continue
 
 
                 if time.time() - cache['last_cache_update'] > cache['cache_validity']:
                     await update_games_cache() # update_games_cache muss angepasst sein, um nur B2:B zu lesen!
 
-                vote_weight = config.get('super_vote_weight', 10) if vote_type == 'super_vote' else 1
+                vote_weight = 1
+                if vote_type == 'super_vote':
+                    vote_weight = config.get('super_vote_weight', 10)
+                elif vote_type == 'ultra_vote':
+                    vote_weight = config.get('ultra_vote_weight', 25)
+                elif vote_type == 'manual':
+                    vote_weight = vote_data.get('manual_count', 1)
 
                 match = None
                 score = 0
@@ -638,7 +830,7 @@ async def process_votes(config):
                         # --------- NEUE REIHENFOLGE ---------
                         # 1. Rang berechnen und Nachricht senden (nutzt new_votes)
                         #    Diese Funktion liest das Sheet selbst und simuliert die Änderung
-                        await calculate_rank_and_notify(session, config, match, new_votes, user)
+                        await calculate_rank_and_notify(session, config, match, new_votes, vote_weight, user)
 
                         # 2. Einzelne Zelle im Sheet aktualisieren (falls vorhanden)
                         if cell:
@@ -659,7 +851,8 @@ async def process_votes(config):
                         # ---------------------------------
 
                         # 4. Vote als erledigt markieren
-                        await fulfill_vote(session, config, reward_id, vote_id)
+                        if vote_type != 'manual':
+                            await fulfill_vote(session, config, reward_id, vote_id)
 
                     except gspread.exceptions.APIError as e:
                          print(f"Google Sheets API Fehler bei Verarbeitung von '{match}': {e}")
@@ -672,7 +865,8 @@ async def process_votes(config):
                     # Kein Match gefunden
                     print(f"Kein passendes Spiel für '{user_input}'. Wird als ungenau gespeichert.")
                     save_inaccurate_game(user_input)
-                    await fulfill_vote(session, config, reward_id, vote_id)
+                    if vote_type != 'manual':
+                        await fulfill_vote(session, config, reward_id, vote_id)
 
                 # Markiere den Job in der Queue als erledigt
                 vote_queue.task_done()
@@ -867,6 +1061,60 @@ async def fulfill_vote(session, config, reward_id, vote_id):
         print(f"Exception beim Erfüllen des Votes {vote_id}: {str(e)}")
 
 
+def manual_input_loop(loop, vote_queue):
+    """Liest manuelle Votes von der Konsole (blockierend, daher in Executor laufen lassen)"""
+    # Kurze Wartezeit, damit der Banner und Logs erst erscheinen
+    time.sleep(2)
+    print("\n" + "="*30)
+    print("MANUELLER MODUS AKTIV")
+    print("Eingabeformat: <Spielname> ENTER <Anzahl> ENTER")
+    print("Tippe 'exit' um den manuellen Modus zu beenden.")
+    print("="*30 + "\n")
+    
+    while True:
+        try:
+            # Wir nutzen input() - das ist okay da wir im Thread sind
+            # Prompt leer lassen, um Logs nicht zu zerschießen
+            game_name = input() 
+            if not game_name.strip(): continue
+            
+            if game_name.strip().lower() == "exit":
+                print("Manueller Input beendet.")
+                break
+
+            print(f"-> Eingabe '{game_name}' erhalten. Bitte Anzahl der Votes eingeben:")
+            vote_count_str = input()
+            try:
+                vote_count = int(vote_count_str)
+            except ValueError:
+                print("Ungültige Zahl! Vote abgebrochen. Bitte Spielnamen erneut eingeben.")
+                continue
+
+            # In die Queue damit
+            # Wir nutzen run_coroutine_threadsafe, da wir in einem Thread sind
+            entry = {
+                'user_name': 'PlatinPraesident',
+                'user_input': game_name.strip(),
+                'id': f'manual_{int(time.time())}'
+            }
+            
+            asyncio.run_coroutine_threadsafe(
+                vote_queue.put({
+                    'entry': entry,
+                    'vote_type': 'manual',
+                    'manual_count': vote_count,
+                    'reward_id': None
+                }),
+                loop
+            )
+            print(f"-> Vote für '{game_name}' ({vote_count}) eingereiht.\n")
+
+        except EOFError:
+            break
+        except Exception as e:
+            print(f"Fehler bei manueller Eingabe: {e}")
+
+
 async def main():
     """Hauptfunktion des Programms"""
     banner()
@@ -915,6 +1163,7 @@ async def main():
     print(f"Broadcaster ID: {config.get('broadcaster_id', 'Unbekannt')}")
     print(f"Überwachte Normal Vote Reward ID: {config.get('rewards', {}).get('normal_vote', 'Nicht gesetzt')}")
     print(f"Überwachte Super Vote Reward ID: {config.get('rewards', {}).get('super_vote', 'Nicht gesetzt')}")
+    print(f"Überwachte AI Chat Reward ID: {config.get('rewards', {}).get('ai_chat', 'Nicht gesetzt')}")
     print(f"Spreadsheet ID: {config.get('spreadsheet_id', 'Nicht gesetzt')}")
     print("\nÜberwache Votes...")
 
@@ -923,6 +1172,10 @@ async def main():
     # Sie rufen intern ensure_valid_token auf, was bei Bedarf die Tokens prüft/erneuert
     listener_task = asyncio.create_task(listen_to_redemptions(config))
     processor_task = asyncio.create_task(process_votes(config))
+
+    # Starte manuellen Input im Hintergrund (in eigenem Thread, da blockierend)
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, manual_input_loop, loop, vote_queue)
 
     # Warten auf Abbruch (z.B. durch Strg+C)
     try:
